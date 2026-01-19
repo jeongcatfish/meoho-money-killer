@@ -17,13 +17,13 @@ TradingView 전략 시그널로만 진입하고, 익절/손절은 서버가 판�
 ## 설치 및 실행
 ```bash
 python3.11 -m pip install -r requirements.txt
-python3.11 -m uvicorn main:app --reload
+python3.11 -m uvicorn main:app --reload --port 8005
 ```
 
 ## Docker 실행
 ```bash
 docker build -t pine-slave .
-docker run --rm -p 8000:8000 --env-file .env pine-slave
+docker run --rm -p 8005:8005 --env-file .env pine-slave
 ```
 
 ## Docker Compose 실행 (대안)
@@ -76,5 +76,5 @@ UP_BIT_SECRET_KEY=...
 - 주문/청산/체결/에러 로그는 서버 로그에서 확인합니다.
 
 ## 확인 방법
-- UI: `http://127.0.0.1:8000/`
-- 자산 조회: `http://127.0.0.1:8000/account/balances`
+- UI: `http://127.0.0.1:8005/`
+- 자산 조회: `http://127.0.0.1:8005/account/balances`
