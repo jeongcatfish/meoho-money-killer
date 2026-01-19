@@ -1,0 +1,98 @@
+import asyncio
+import logging
+import math
+
+from tenacity import (
+    AsyncRetrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+from config import Settings
+from position import PositionManager, PositionStatus
+from upbit_client import OrderNotFilledError, UpbitClient
+
+
+class PriceWatcher:
+    def __init__(
+        self, position_manager: PositionManager, upbit_client: UpbitClient, settings: Settings
+    ) -> None:
+        self._position_manager = position_manager
+        self._upbit_client = upbit_client
+        self._settings = settings
+        self._logger = logging.getLogger(__name__)
+        self._task: asyncio.Task | None = None
+        self._lock = asyncio.Lock()
+        self._last_price: float | None = None
+
+    @property
+    def last_price(self) -> float | None:
+        return self._last_price
+
+    async def ensure_running(self) -> None:
+        async with self._lock:
+            if self._task and not self._task.done():
+                return
+            self._task = asyncio.create_task(self._run())
+
+    async def _fetch_price(self, market: str) -> float:
+        retrying = AsyncRetrying(
+            retry=retry_if_exception_type(Exception),
+            stop=stop_after_attempt(self._settings.price_retry_attempts),
+            wait=wait_exponential(
+                multiplier=1,
+                min=self._settings.price_retry_wait_min,
+                max=self._settings.price_retry_wait_max,
+            ),
+            reraise=True,
+        )
+        async for attempt in retrying:
+            with attempt:
+                return await asyncio.to_thread(self._upbit_client.get_ticker, market)
+        raise RuntimeError("Price retry loop exited unexpectedly.")
+
+    async def _close_position(self, reason: str, market: str, amount: float) -> None:
+        self._logger.info("Trigger %s: closing position %s %.8f", reason, market, amount)
+        order = await asyncio.to_thread(self._upbit_client.place_market_sell, market, amount)
+        order_uuid = order.get("uuid")
+        if not order_uuid:
+            raise RuntimeError("Missing order uuid for close.")
+        await asyncio.to_thread(self._upbit_client.wait_order_filled, order_uuid)
+        await self._position_manager.close_position()
+        self._logger.info("Position closed: %s", reason)
+
+    async def _run(self) -> None:
+        while True:
+            position = await self._position_manager.get()
+            if not position or position.status != PositionStatus.OPEN:
+                return
+            if position.tp <= 0 or position.sl <= 0:
+                self._logger.warning("TP/SL not set; stopping watcher.")
+                return
+
+            try:
+                price = await self._fetch_price(position.market)
+                self._last_price = price
+            except Exception:
+                self._logger.error("Ticker fetch failed.", exc_info=True)
+                await asyncio.sleep(self._settings.price_poll_sec)
+                continue
+
+            tp_price = position.entry_price * (1 + position.tp)
+            sl_price = position.entry_price * (1 - position.sl)
+
+            if price > tp_price or math.isclose(price, tp_price, rel_tol=1e-6, abs_tol=1e-6):
+                try:
+                    await self._close_position("TP", position.market, position.amount)
+                except (OrderNotFilledError, Exception):
+                    self._logger.error("Failed to close on TP.", exc_info=True)
+            elif price < sl_price or math.isclose(
+                price, sl_price, rel_tol=1e-6, abs_tol=1e-6
+            ):
+                try:
+                    await self._close_position("SL", position.market, position.amount)
+                except (OrderNotFilledError, Exception):
+                    self._logger.error("Failed to close on SL.", exc_info=True)
+
+            await asyncio.sleep(self._settings.price_poll_sec)
