@@ -5,11 +5,59 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request
 
+from config import Settings
 from position import Position, PositionStatus
-from upbit_client import OrderNotFilledError, UpbitAPIError
+from upbit_client import OrderNotFilledError, UpbitAPIError, UpbitClient
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _order_state(order: dict) -> str:
+    state = order.get("state") or order.get("status") or ""
+    return str(state).lower()
+
+
+async def _fetch_order(upbit_client: UpbitClient, order_uuid: str) -> dict:
+    return await asyncio.to_thread(upbit_client.get_order, order_uuid)
+
+
+async def _safe_cancel_order(upbit_client: UpbitClient, order_uuid: str) -> None:
+    try:
+        await asyncio.to_thread(upbit_client.cancel_order, order_uuid)
+    except Exception:
+        logger.warning("Order cancel failed.", exc_info=True)
+
+
+async def _resolve_filled_order(
+    upbit_client: UpbitClient, settings: Settings, order_uuid: str
+) -> dict:
+    try:
+        return await asyncio.to_thread(upbit_client.wait_order_filled, order_uuid)
+    except OrderNotFilledError as exc:
+        logger.warning("Order fill timeout; re-checking order status (%s).", exc)
+    except Exception:
+        logger.warning("Order fill check failed; re-checking order status.", exc_info=True)
+
+    order = await _fetch_order(upbit_client, order_uuid)
+    state = _order_state(order)
+    filled_volume = upbit_client.extract_filled_volume(order)
+    if state == "done":
+        return order
+
+    if filled_volume > 0:
+        await _safe_cancel_order(upbit_client, order_uuid)
+        await asyncio.sleep(settings.order_fill_poll_sec)
+        return await _fetch_order(upbit_client, order_uuid)
+
+    await _safe_cancel_order(upbit_client, order_uuid)
+    await asyncio.sleep(settings.order_fill_poll_sec)
+    order = await _fetch_order(upbit_client, order_uuid)
+    state = _order_state(order)
+    filled_volume = upbit_client.extract_filled_volume(order)
+    if state == "done" or filled_volume > 0:
+        return order
+    raise OrderNotFilledError("Order not filled within timeout.")
 
 
 @router.post("/webhook/tradingview")
@@ -66,27 +114,25 @@ async def tradingview_webhook(request: Request) -> dict:
             order_uuid = order.get("uuid")
             if not order_uuid:
                 raise RuntimeError("Missing order uuid.")
-            try:
-                filled_order = await asyncio.to_thread(
-                    upbit_client.wait_order_filled, order_uuid
-                )
-            except OrderNotFilledError:
-                logger.warning("Order fill timeout; re-checking order status.")
-                filled_order = await asyncio.to_thread(upbit_client.get_order, order_uuid)
-                state = filled_order.get("state") or filled_order.get("status")
-                if state != "done":
-                    raise
+            filled_order = await _resolve_filled_order(upbit_client, settings, order_uuid)
             entry_price = upbit_client.calculate_avg_price(filled_order)
             filled_volume = upbit_client.extract_filled_volume(filled_order)
             if entry_price <= 0 or filled_volume <= 0:
+                logger.warning("Fill data incomplete; reloading order snapshot.")
+                filled_order = await _fetch_order(upbit_client, order_uuid)
+                entry_price = upbit_client.calculate_avg_price(filled_order)
+                filled_volume = upbit_client.extract_filled_volume(filled_order)
+            if entry_price <= 0 or filled_volume <= 0:
                 raise RuntimeError("Invalid fill data.")
+            state = _order_state(filled_order)
+            if state != "done":
+                logger.warning(
+                    "Order not marked done; using executed volume %.8f", filled_volume
+                )
         except UpbitAPIError as exc:
             logger.error("Order failed.", exc_info=True)
             if order_uuid:
-                try:
-                    await asyncio.to_thread(upbit_client.cancel_order, order_uuid)
-                except Exception:
-                    logger.error("Order cancel failed.", exc_info=True)
+                await _safe_cancel_order(upbit_client, order_uuid)
             status_code = exc.status_code
             if status_code >= 500:
                 status_code = 502
@@ -95,10 +141,7 @@ async def tradingview_webhook(request: Request) -> dict:
         except (OrderNotFilledError, Exception):
             logger.error("Order failed.", exc_info=True)
             if order_uuid:
-                try:
-                    await asyncio.to_thread(upbit_client.cancel_order, order_uuid)
-                except Exception:
-                    logger.error("Order cancel failed.", exc_info=True)
+                await _safe_cancel_order(upbit_client, order_uuid)
             raise HTTPException(status_code=500, detail="Order failed")
 
         position = Position(

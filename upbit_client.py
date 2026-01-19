@@ -208,11 +208,22 @@ class UpbitClient:
 
     @staticmethod
     def extract_filled_volume(order: dict) -> float:
-        if "executed_volume" in order and order["executed_volume"] is not None:
-            return float(order["executed_volume"])
         trades = order.get("trades") or []
-        total_volume = sum(float(trade["volume"]) for trade in trades)
-        return total_volume
+        total_volume = 0.0
+        for trade in trades:
+            try:
+                total_volume += float(trade.get("volume") or 0.0)
+            except (TypeError, ValueError):
+                continue
+        if total_volume > 0:
+            return total_volume
+        executed_volume = order.get("executed_volume")
+        if executed_volume is None:
+            return 0.0
+        try:
+            return float(executed_volume)
+        except (TypeError, ValueError):
+            return 0.0
 
     @staticmethod
     def calculate_avg_price(order: dict) -> float:

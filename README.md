@@ -20,6 +20,17 @@ python3.11 -m pip install -r requirements.txt
 python3.11 -m uvicorn main:app --reload
 ```
 
+## Docker 실행
+```bash
+docker build -t pine-slave .
+docker run --rm -p 8000:8000 --env-file .env pine-slave
+```
+
+## Docker Compose 실행 (대안)
+```bash
+docker compose up --build
+```
+
 ## 환경 변수 (.env)
 `.env` 파일에 아래 키를 설정하세요.
 
