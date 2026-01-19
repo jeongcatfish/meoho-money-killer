@@ -10,15 +10,36 @@ from upbit_auth import create_jwt_token
 
 
 class UpbitAPIError(Exception):
-    def __init__(self, status_code: int, payload: dict | None, response_text: str) -> None:
-        super().__init__(f"Upbit API error {status_code}: {response_text}")
+    def __init__(
+        self,
+        status_code: int,
+        request_params: dict | None,
+        response_text: str,
+        error_name: str | None = None,
+        error_message: str | None = None,
+        response_payload: dict | None = None,
+    ) -> None:
+        label = error_message or response_text
+        if error_name:
+            label = f"{error_name}: {label}"
+        super().__init__(f"Upbit API error {status_code}: {label}")
         self.status_code = status_code
-        self.payload = payload
+        self.request_params = request_params
         self.response_text = response_text
+        self.error_name = error_name
+        self.error_message = error_message
+        self.response_payload = response_payload
 
     @property
     def retryable(self) -> bool:
         return self.status_code >= 500 or self.status_code == 429
+
+    def user_message(self) -> str:
+        if self.error_message:
+            if self.error_name:
+                return f"{self.error_name}: {self.error_message}"
+            return self.error_message
+        return self.response_text
 
 
 class OrderNotFilledError(Exception):
@@ -46,29 +67,55 @@ class UpbitClient:
         if remaining:
             self._logger.info("Rate limit remaining: %s", remaining)
 
+    def _parse_error(self, response: requests.Response) -> tuple[dict | None, str | None, str | None]:
+        try:
+            payload = response.json()
+        except ValueError:
+            return None, None, None
+        if isinstance(payload, dict):
+            error = payload.get("error") or {}
+            name = error.get("name")
+            message = error.get("message")
+            return payload, name, message
+        return payload, None, None
+
     def _request(
         self, method: str, path: str, params: dict | None = None, auth: bool = True
     ) -> Any:
         url = f"{self._settings.upbit_base_url}{path}"
         headers = {}
+        params_items = None
+        if params:
+            if isinstance(params, dict):
+                params_items = list(params.items())
+            else:
+                params_items = list(params)
         if auth:
             token = create_jwt_token(
                 self._settings.upbit_access_key,
                 self._settings.upbit_secret_key,
-                params or {},
+                params_items or None,
             )
             headers["Authorization"] = f"Bearer {token}"
         response = self._session.request(
             method=method,
             url=url,
-            params=params,
+            params=params_items,
             headers=headers,
             timeout=10,
         )
         self._log_rate_limit(response)
         self._logger.info("Upbit response: %s %s %s", method, path, response.text)
         if response.status_code >= 400:
-            raise UpbitAPIError(response.status_code, params, response.text)
+            payload, error_name, error_message = self._parse_error(response)
+            raise UpbitAPIError(
+                response.status_code,
+                params,
+                response.text,
+                error_name=error_name,
+                error_message=error_message,
+                response_payload=payload,
+            )
         try:
             return response.json()
         except ValueError:
@@ -140,6 +187,13 @@ class UpbitClient:
                     raise OrderNotFilledError("Order partially filled.")
                 return order
             time.sleep(self._settings.order_fill_poll_sec)
+        order = self.get_order(order_uuid)
+        state = order.get("state") or order.get("status")
+        if state == "done":
+            remaining_volume = float(order.get("remaining_volume") or 0.0)
+            if remaining_volume > 0:
+                raise OrderNotFilledError("Order partially filled.")
+            return order
         raise OrderNotFilledError("Order not filled within timeout.")
 
     def get_ticker(self, market: str) -> float:
@@ -169,6 +223,11 @@ class UpbitClient:
             return total / volume if volume else 0.0
         if "avg_price" in order and order["avg_price"] is not None:
             return float(order["avg_price"])
+        if order.get("ord_type") == "price":
+            executed_volume = UpbitClient.extract_filled_volume(order)
+            total_price = float(order.get("price") or 0.0)
+            if executed_volume > 0 and total_price > 0:
+                return total_price / executed_volume
         if "price" in order and order["price"] is not None:
             return float(order["price"])
         return 0.0

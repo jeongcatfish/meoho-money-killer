@@ -548,6 +548,8 @@ async def dashboard() -> str:
       return wrap;
     }
 
+    const hiddenCurrencies = new Set(["BTT", "APENFT"]);
+
     function renderBalances(accounts) {
       const container = document.getElementById("balances");
       clearNode(container);
@@ -561,10 +563,22 @@ async def dashboard() -> str:
         return;
       }
 
-      document.getElementById("balances-meta").textContent =
-        accounts.length + " assets · " + new Date().toLocaleTimeString();
+      const visibleAccounts = accounts.filter(
+        (account) => !hiddenCurrencies.has(account.currency)
+      );
 
-      accounts.forEach((account) => {
+      document.getElementById("balances-meta").textContent =
+        visibleAccounts.length + " assets · " + new Date().toLocaleTimeString();
+
+      if (visibleAccounts.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "accounts-empty";
+        empty.textContent = "No visible balances.";
+        container.appendChild(empty);
+        return;
+      }
+
+      visibleAccounts.forEach((account) => {
         const row = document.createElement("div");
         row.className = "accounts-row";
         if (account.currency === "KRW") {
@@ -654,7 +668,7 @@ async def dashboard() -> str:
     }
 
     fetchStatus();
-    setInterval(fetchStatus, 2000);
+    setInterval(fetchStatus, 500);
   </script>
 </body>
 </html>

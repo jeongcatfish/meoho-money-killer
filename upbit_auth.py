@@ -5,13 +5,15 @@ from urllib.parse import urlencode
 import jwt
 
 
-def _build_query_hash(params: dict) -> str:
-    sorted_items = sorted(params.items(), key=lambda item: item[0])
-    query_string = urlencode(sorted_items, doseq=True).encode()
+def _build_query_hash(params: dict | list[tuple[str, str]]) -> str:
+    # Upbit validates the hash against the exact encoded query order.
+    query_string = urlencode(params, doseq=True).encode()
     return hashlib.sha512(query_string).hexdigest()
 
 
-def create_jwt_token(access_key: str, secret_key: str, params: dict | None = None) -> str:
+def create_jwt_token(
+    access_key: str, secret_key: str, params: dict | list[tuple[str, str]] | None = None
+) -> str:
     payload: dict[str, str] = {
         "access_key": access_key,
         "nonce": str(uuid.uuid4()),
