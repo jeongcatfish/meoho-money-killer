@@ -11,16 +11,22 @@ from tenacity import (
 
 from config import Settings
 from position import PositionManager, PositionStatus
+from telemetry import AppTelemetry, error_message
 from upbit_client import OrderNotFilledError, UpbitClient
 
 
 class PriceWatcher:
     def __init__(
-        self, position_manager: PositionManager, upbit_client: UpbitClient, settings: Settings
+        self,
+        position_manager: PositionManager,
+        upbit_client: UpbitClient,
+        settings: Settings,
+        telemetry: AppTelemetry | None = None,
     ) -> None:
         self._position_manager = position_manager
         self._upbit_client = upbit_client
         self._settings = settings
+        self._telemetry = telemetry
         self._logger = logging.getLogger(__name__)
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
@@ -52,14 +58,30 @@ class PriceWatcher:
                 return await asyncio.to_thread(self._upbit_client.get_ticker, market)
         raise RuntimeError("Price retry loop exited unexpectedly.")
 
-    async def _close_position(self, reason: str, market: str, amount: float) -> None:
+    async def _close_position(
+        self, reason: str, market: str, amount: float, trigger_price: float | None
+    ) -> None:
         self._logger.info("Trigger %s: closing position %s %.8f", reason, market, amount)
-        order = await asyncio.to_thread(self._upbit_client.place_market_sell, market, amount)
-        order_uuid = order.get("uuid")
-        if not order_uuid:
-            raise RuntimeError("Missing order uuid for close.")
-        await asyncio.to_thread(self._upbit_client.wait_order_filled, order_uuid)
-        await self._position_manager.close_position()
+        try:
+            order = await asyncio.to_thread(self._upbit_client.place_market_sell, market, amount)
+            if self._telemetry:
+                self._telemetry.record_api_ok()
+            order_uuid = order.get("uuid")
+            if not order_uuid:
+                raise RuntimeError("Missing order uuid for close.")
+            await asyncio.to_thread(self._upbit_client.wait_order_filled, order_uuid)
+            if self._telemetry:
+                self._telemetry.record_api_ok()
+            await self._position_manager.close_position()
+        except Exception as exc:
+            if self._telemetry:
+                self._telemetry.record_api_error(error_message(exc))
+            raise
+        price_note = ""
+        if trigger_price is not None and math.isfinite(trigger_price):
+            price_note = f" @ {trigger_price:.4f}"
+        if self._telemetry:
+            self._telemetry.add_event(f"Closed {market} {reason}{price_note}")
         self._logger.info("Position closed: %s", reason)
 
     async def _run(self) -> None:
@@ -74,8 +96,12 @@ class PriceWatcher:
             try:
                 price = await self._fetch_price(position.market)
                 self._last_price = price
-            except Exception:
+                if self._telemetry:
+                    self._telemetry.record_api_ok()
+            except Exception as exc:
                 self._logger.error("Ticker fetch failed.", exc_info=True)
+                if self._telemetry:
+                    self._telemetry.record_api_error(error_message(exc))
                 await asyncio.sleep(self._settings.price_poll_sec)
                 continue
 
@@ -84,15 +110,29 @@ class PriceWatcher:
 
             if price > tp_price or math.isclose(price, tp_price, rel_tol=1e-6, abs_tol=1e-6):
                 try:
-                    await self._close_position("TP", position.market, position.amount)
-                except (OrderNotFilledError, Exception):
+                    await self._close_position(
+                        "TP", position.market, position.amount, trigger_price=price
+                    )
+                except (OrderNotFilledError, Exception) as exc:
                     self._logger.error("Failed to close on TP.", exc_info=True)
+                    if self._telemetry:
+                        self._telemetry.record_api_error(error_message(exc))
+                        self._telemetry.add_event(
+                            f"Close failed {position.market} TP", level="error"
+                        )
             elif price < sl_price or math.isclose(
                 price, sl_price, rel_tol=1e-6, abs_tol=1e-6
             ):
                 try:
-                    await self._close_position("SL", position.market, position.amount)
-                except (OrderNotFilledError, Exception):
+                    await self._close_position(
+                        "SL", position.market, position.amount, trigger_price=price
+                    )
+                except (OrderNotFilledError, Exception) as exc:
                     self._logger.error("Failed to close on SL.", exc_info=True)
+                    if self._telemetry:
+                        self._telemetry.record_api_error(error_message(exc))
+                        self._telemetry.add_event(
+                            f"Close failed {position.market} SL", level="error"
+                        )
 
             await asyncio.sleep(self._settings.price_poll_sec)

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from config import Settings
 from position import Position, PositionStatus
+from telemetry import error_message
 from upbit_client import OrderNotFilledError, UpbitAPIError, UpbitClient
 
 router = APIRouter()
@@ -96,6 +97,9 @@ async def tradingview_webhook(request: Request) -> dict:
     upbit_client = request.app.state.upbit_client
     price_watcher = request.app.state.price_watcher
     order_lock = request.app.state.order_lock
+    telemetry = request.app.state.telemetry
+
+    telemetry.record_webhook(signal_id)
 
     if price_krw < settings.min_order_krw:
         raise HTTPException(status_code=400, detail="Price below minimum order size")
@@ -129,19 +133,24 @@ async def tradingview_webhook(request: Request) -> dict:
                 logger.warning(
                     "Order not marked done; using executed volume %.8f", filled_volume
                 )
+            telemetry.record_api_ok()
         except UpbitAPIError as exc:
             logger.error("Order failed.", exc_info=True)
+            telemetry.record_api_error(error_message(exc))
             if order_uuid:
                 await _safe_cancel_order(upbit_client, order_uuid)
             status_code = exc.status_code
             if status_code >= 500:
                 status_code = 502
             detail = exc.user_message()
+            telemetry.add_event(f"Order failed {market}: {detail}", level="error")
             raise HTTPException(status_code=status_code, detail=detail)
-        except (OrderNotFilledError, Exception):
+        except (OrderNotFilledError, Exception) as exc:
             logger.error("Order failed.", exc_info=True)
+            telemetry.record_api_error(error_message(exc))
             if order_uuid:
                 await _safe_cancel_order(upbit_client, order_uuid)
+            telemetry.add_event(f"Order failed {market}", level="error")
             raise HTTPException(status_code=500, detail="Order failed")
 
         position = Position(
@@ -157,6 +166,7 @@ async def tradingview_webhook(request: Request) -> dict:
         )
         await position_manager.open_position(position)
         logger.info("Position opened at %.8f", entry_price)
+        telemetry.add_event(f"Opened {market} @ {entry_price:.8f}")
 
         await price_watcher.ensure_running()
         return {"status": "ok", "position": position.to_dict()}
