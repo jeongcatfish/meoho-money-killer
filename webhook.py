@@ -166,7 +166,7 @@ async def tradingview_webhook(request: Request) -> dict:
         )
         await position_manager.open_position(position)
         logger.info("Position opened at %.8f", entry_price)
-        telemetry.add_event(f"Opened {market} @ {entry_price:.8f}")
+        telemetry.add_event(f"Opened {market}", kind="open", roi=0.0)
 
         await price_watcher.ensure_running()
         return {"status": "ok", "position": position.to_dict()}

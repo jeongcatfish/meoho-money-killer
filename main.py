@@ -103,7 +103,7 @@ async def _recover_position(app: FastAPI) -> None:
         market, entry_price, amount, settings.recovery_tp, settings.recovery_sl
     )
     logger.warning("Recovered position for %s with avg price %.8f", market, entry_price)
-    telemetry.add_event(f"Recovered {market} @ {entry_price:.8f}", level="warn")
+    telemetry.add_event(f"Recovered {market}", level="warn", kind="open")
     if settings.recovery_tp > 0 and settings.recovery_sl > 0:
         await app.state.price_watcher.ensure_running()
     else:
@@ -422,7 +422,19 @@ async def dashboard() -> str:
       padding: 10px 12px;
       border-radius: 12px;
       border: 1px solid var(--line);
+      border-left-width: 4px;
+      border-left-color: transparent;
       background: rgba(18, 33, 43, 0.04);
+    }
+    .activity-row[data-action="open"] {
+      background: rgba(31, 138, 112, 0.08);
+      border-color: rgba(31, 138, 112, 0.3);
+      border-left-color: rgba(31, 138, 112, 0.7);
+    }
+    .activity-row[data-action="close"] {
+      background: rgba(255, 138, 61, 0.08);
+      border-color: rgba(255, 138, 61, 0.3);
+      border-left-color: rgba(255, 138, 61, 0.7);
     }
     .activity-row[data-level="error"] {
       background: rgba(208, 74, 58, 0.08);
@@ -919,12 +931,20 @@ async def dashboard() -> str:
         const row = document.createElement("div");
         row.className = "activity-row";
         row.dataset.level = event.level || "info";
+        if (typeof event.kind === "string" && event.kind) {
+          row.dataset.action = event.kind.toLowerCase();
+        }
         const timeEl = document.createElement("div");
         timeEl.className = "activity-time";
         timeEl.textContent = formatTimestamp(event.ts, serverTime);
         const msgEl = document.createElement("div");
         msgEl.className = "activity-msg";
-        msgEl.textContent = event.message || "--";
+        let message = event.message || "--";
+        const roiValue = Number(event.roi);
+        if (Number.isFinite(roiValue)) {
+          message += " · ROI " + formatSignedPercent(roiValue);
+        }
+        msgEl.textContent = message;
         row.appendChild(timeEl);
         row.appendChild(msgEl);
         container.appendChild(row);

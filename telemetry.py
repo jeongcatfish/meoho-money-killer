@@ -53,9 +53,16 @@ class Event:
     ts: float
     message: str
     level: str = "info"
+    kind: str | None = None
+    roi: float | None = None
 
     def to_dict(self) -> dict:
-        return {"ts": self.ts, "message": self.message, "level": self.level}
+        payload = {"ts": self.ts, "message": self.message, "level": self.level}
+        if self.kind is not None:
+            payload["kind"] = self.kind
+        if self.roi is not None:
+            payload["roi"] = self.roi
+        return payload
 
 
 class AppTelemetry:
@@ -75,8 +82,16 @@ class AppTelemetry:
         self.webhook.last_signal_id = signal_id
         self.webhook.last_received_at = time.time()
 
-    def add_event(self, message: str, level: str = "info") -> None:
-        self._events.append(Event(time.time(), _truncate(message), level))
+    def add_event(
+        self,
+        message: str,
+        level: str = "info",
+        kind: str | None = None,
+        roi: float | None = None,
+    ) -> None:
+        self._events.append(
+            Event(time.time(), _truncate(message), level, kind=kind, roi=roi)
+        )
 
     def get_events(self) -> list[dict]:
         return [event.to_dict() for event in self._events]

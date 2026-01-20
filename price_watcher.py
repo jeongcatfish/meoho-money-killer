@@ -59,9 +59,15 @@ class PriceWatcher:
         raise RuntimeError("Price retry loop exited unexpectedly.")
 
     async def _close_position(
-        self, reason: str, market: str, amount: float, trigger_price: float | None
+        self,
+        reason: str,
+        market: str,
+        amount: float,
+        trigger_price: float | None,
+        entry_price: float | None = None,
     ) -> None:
         self._logger.info("Trigger %s: closing position %s %.8f", reason, market, amount)
+        filled_order = None
         try:
             order = await asyncio.to_thread(self._upbit_client.place_market_sell, market, amount)
             if self._telemetry:
@@ -69,7 +75,9 @@ class PriceWatcher:
             order_uuid = order.get("uuid")
             if not order_uuid:
                 raise RuntimeError("Missing order uuid for close.")
-            await asyncio.to_thread(self._upbit_client.wait_order_filled, order_uuid)
+            filled_order = await asyncio.to_thread(
+                self._upbit_client.wait_order_filled, order_uuid
+            )
             if self._telemetry:
                 self._telemetry.record_api_ok()
             await self._position_manager.close_position()
@@ -77,11 +85,27 @@ class PriceWatcher:
             if self._telemetry:
                 self._telemetry.record_api_error(error_message(exc))
             raise
-        price_note = ""
-        if trigger_price is not None and math.isfinite(trigger_price):
-            price_note = f" @ {trigger_price:.4f}"
+        close_price = None
+        if filled_order:
+            close_price = self._upbit_client.calculate_avg_price(filled_order)
+        if (
+            close_price is None
+            or not math.isfinite(close_price)
+            or close_price <= 0
+        ) and trigger_price is not None and math.isfinite(trigger_price):
+            close_price = trigger_price
+        roi = None
+        if (
+            entry_price is not None
+            and math.isfinite(entry_price)
+            and entry_price > 0
+            and close_price is not None
+            and math.isfinite(close_price)
+            and close_price > 0
+        ):
+            roi = close_price / entry_price - 1
         if self._telemetry:
-            self._telemetry.add_event(f"Closed {market} {reason}{price_note}")
+            self._telemetry.add_event(f"Closed {market} {reason}", kind="close", roi=roi)
         self._logger.info("Position closed: %s", reason)
 
     async def _run(self) -> None:
@@ -111,7 +135,11 @@ class PriceWatcher:
             if price > tp_price or math.isclose(price, tp_price, rel_tol=1e-6, abs_tol=1e-6):
                 try:
                     await self._close_position(
-                        "TP", position.market, position.amount, trigger_price=price
+                        "TP",
+                        position.market,
+                        position.amount,
+                        trigger_price=price,
+                        entry_price=position.entry_price,
                     )
                 except (OrderNotFilledError, Exception) as exc:
                     self._logger.error("Failed to close on TP.", exc_info=True)
@@ -125,7 +153,11 @@ class PriceWatcher:
             ):
                 try:
                     await self._close_position(
-                        "SL", position.market, position.amount, trigger_price=price
+                        "SL",
+                        position.market,
+                        position.amount,
+                        trigger_price=price,
+                        entry_price=position.entry_price,
                     )
                 except (OrderNotFilledError, Exception) as exc:
                     self._logger.error("Failed to close on SL.", exc_info=True)
