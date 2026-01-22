@@ -1,0 +1,204 @@
+//@version=5
+strategy("EMA 수렴 전략  (수렴 '시작' 진입 + CI 필터)", 
+         overlay=true, 
+         initial_capital=10000, 
+         default_qty_type=strategy.percent_of_equity, 
+         default_qty_value=100,
+         pyramiding=0)
+
+// --- 그룹 설정 ---
+grpEMA = "EMA 설정"
+grpCond = "수렴/기울기 설정"
+grpFilter = "횡보 필터 (Choppiness Index)"
+grpShared = "리스크 관리 (ATR)"
+grpTP = "리스크 관리 (Take Profit)"
+grpRisk = "리스크 관리 (Stop Loss / Trailing)"
+
+// --- 1. EMA 및 수렴 조건 입력 ---
+// EMA 설정
+len1 = input.int(20, "EMA 1 (빠름)", group=grpEMA)
+len2 = input.int(60, "EMA 2", group=grpEMA)
+len3 = input.int(120, "EMA 3", group=grpEMA)
+len4 = input.int(200, "EMA 4 (느림)", group=grpEMA)
+src = input.source(close, "소스", group=grpEMA)
+// 수렴 설정
+compressionThreshold = input.float(1.0, "수렴 기준치 (%)", minval=0.1, step=0.1, group=grpCond)
+// 기울기 기준 EMA 선택
+slopeEmaLen = input.string("200", title="기울기 기준 EMA", options=["20", "60", "120", "200"], group=grpCond)
+
+// CI 필터 설정
+useCiFilter = input.bool(true, "CI 필터 활성화 (On/Off)", group=grpFilter)
+ciLen = input.int(14, "CI 기간", group=grpFilter)
+ciThreshold = input.float(61.8, "CI 횡보 기준값 (이 값 이상이면 횡보)", group=grpFilter, tooltip="이 값보다 CI가 높으면 횡보로 간주하여 진입하지 않습니다.")
+
+
+// --- 2. 전략 로직 계산 ---
+// EMA 계산
+ema1 = ta.ema(src, len1)
+ema2 = ta.ema(src, len2)
+ema3 = ta.ema(src, len3)
+ema4 = ta.ema(src, len4)
+
+// 수렴 조건
+maxEma = math.max(ema1, ema2, ema3, ema4)
+minEma = math.min(ema1, ema2, ema3, ema4)
+spread = maxEma - minEma
+thresholdValue = ema4 * (compressionThreshold / 100)
+isCompressed = spread < thresholdValue
+
+// UPDATED: '수렴 시작' 트리거 로직 부활 (V8/V9에서 제거되었던 것)
+triggerAlert = isCompressed and not isCompressed[1]
+
+// 선택된 EMA 변수 할당
+float slopeEma = switch slopeEmaLen
+    "20" => ema1
+    "60" => ema2
+    "120" => ema3
+    "200" => ema4
+    => na
+
+// 선택된 EMA의 기울기 계산
+isRising = slopeEma > slopeEma[1]
+isFalling = slopeEma < slopeEma[1]
+
+// CI 계산
+ci_atr = ta.atr(1)
+ci_sum_atr = math.sum(ci_atr, ciLen) // V9.1 수정 사항 적용됨
+ci_hh = ta.highest(high, ciLen)
+ci_ll = ta.lowest(low, ciLen)
+ci_val = 100 * math.log(ci_sum_atr / (ci_hh - ci_ll)) / math.log(ciLen)
+
+// CI 필터 로직
+bool isNotChoppy = ci_val < ciThreshold
+bool isTrending = not useCiFilter or isNotChoppy 
+
+
+// --- 3. 최종 진입 조건 ---
+// UPDATED: 'isCompressed' -> 'triggerAlert'로 되돌림
+longCondition = triggerAlert and isRising and isTrending
+shortCondition = triggerAlert and isFalling and isTrending
+
+
+// --- 4. 리스크 관리 로직 (동일) ---
+
+// 4.1. SHARED VARIABLES
+atrLength = input.int(defval = 14, title = 'ATR Length', minval = 1, group = grpShared)
+float openAtr = ta.valuewhen(longCondition or shortCondition, ta.atr(atrLength), 0)
+var bool longTrailingTakeProfitExecuted = false
+var bool shortTrailingTakeProfitExecuted = false
+
+// 4.2. TAKE PROFIT
+longtakeProfitMethod = input.string(defval = 'PERC', title = '롱 TP 방식', options = ['PERC', 'ATR', 'BOTH'], group = grpTP)
+shorttakeProfitMethod = input.string(defval = 'PERC', title = '숏 TP 방식', options = ['PERC', 'ATR', 'BOTH'], group = grpTP)
+longTakeProfitPerc = input.float(defval = 5.0, title = '롱 TP (%)', minval = 0.05, step = 0.05, group = grpTP) / 100
+shortTakeProfitPerc = input.float(defval = 5.0, title = '숏 TP (%)', minval = 0.05, step = 0.05, group = grpTP) / 100
+longTakeProfitAtrMul = input.float(defval = 2.0, title = '롱 TP ATR 배수', minval = 0.1, step = 0.1, group = grpTP)
+shortTakeProfitAtrMul = input.float(defval = 2.0, title = '숏 TP ATR 배수', minval = 0.1, step = 0.1, group = grpTP)
+
+getLongTakeProfitPrice() =>
+    switch longtakeProfitMethod
+        'PERC' => close * (1 + longTakeProfitPerc)
+        'ATR' => close + longTakeProfitAtrMul * openAtr
+        'BOTH' => math.max(close * (1 + longTakeProfitPerc), close + longTakeProfitAtrMul * openAtr)
+        => na
+var float longTakeProfitPrice = na
+longTakeProfitPrice := if (strategy.position_size > 0 and not longTrailingTakeProfitExecuted)
+    if (longCondition)
+        getLongTakeProfitPrice()
+    else
+        nz(longTakeProfitPrice[1], getLongTakeProfitPrice())
+else
+    na
+longTrailingTakeProfitExecuted := strategy.position_size > 0 and (longTrailingTakeProfitExecuted[1] or (strategy.position_size[1] == 0 and high >= longTakeProfitPrice))
+
+getShortTakeProfitPrice() =>
+    switch shorttakeProfitMethod
+        'PERC' => close * (1 - shortTakeProfitPerc)
+        'ATR' => close - shortTakeProfitAtrMul * openAtr
+        'BOTH' => math.min(close * (1 - shortTakeProfitPerc), close - shortTakeProfitAtrMul * openAtr)
+        => na
+var float shortTakeProfitPrice = na
+shortTakeProfitPrice := if (strategy.position_size < 0 and not shortTrailingTakeProfitExecuted)
+    if (shortCondition)
+        getShortTakeProfitPrice()
+    else
+        nz(shortTakeProfitPrice[1], getShortTakeProfitPrice())
+else
+    na
+shortTrailingTakeProfitExecuted := strategy.position_size < 0 and (shortTrailingTakeProfitExecuted[1] or (strategy.position_size[1] == 0 and low <= shortTakeProfitPrice))
+
+
+// 4.3. STOP LOSS
+stopLossTrailingEnabled = input.string(defval = 'ON', title = '트레일링 활성화', options = ['TP', 'ON', 'OFF'], group = grpRisk, tooltip="ON: 진입 즉시 트레일링 시작\nTP: 롱/숏 TP 도달 후 트레일링 시작\nOFF: 트레일링 B활성화 (고정 손절)")
+stopLossMethod = input.string(defval = 'WICK', title = '트레일링 기준', options = ['CLOSE', 'WICK'], group = grpRisk, tooltip="WICK: 캔들 고가/저가(꼬리) 기준\nCLOSE: 캔들 종가 기준")
+longbreakEvenEnabled = input.bool(defval = true, title = '롱 본절 (Break Even) 활성화', group = grpRisk)
+shortbreakEvenEnabled = input.bool(defval = true, title = '숏 본절 (Break Even) 활성화', group = grpRisk)
+longstopLossMethod = input.string(defval = 'PERC', title = '롱 손절 계산 방식', options = ['PERC', 'ATR', 'BOTH'], group = grpRisk)
+shortstopLossMethod = input.string(defval = 'PERC', title = '숏 손절 계산 방식', options = ['PERC', 'ATR', 'BOTH'], group = grpRisk)
+longTrailingStopLossPerc = input.float(defval = 2.0, title = '롱 손절/트레일링 (%)', minval = 0.05, maxval = 100, step = 0.05, group = grpRisk) / 100
+shortTrailingStopLossPerc = input.float(defval = 2.0, title = '숏 손절/트레일링 (%)', minval = 0.05, maxval = 100, step = 0.05, group = grpRisk) / 100
+longStopLossAtrMul = input.float(defval = 2.0, title = '롱 ATR 배수', minval = 0.1, step = 0.1, group = grpRisk)
+shortStopLossAtrMul = input.float(defval = 2.0, title = '숏 ATR 배수', minval = 0.1, step = 0.1, group = grpRisk)
+
+getLongStopLossPrice(baseSrc) =>
+    switch longstopLossMethod
+        'PERC' => baseSrc * (1 - longTrailingStopLossPerc)
+        'ATR' => baseSrc - longStopLossAtrMul * openAtr
+        'BOTH' => math.max(baseSrc * (1 - longTrailingStopLossPerc), baseSrc - longStopLossAtrMul * openAtr)
+        => na
+bool longTakeProfitTrailingEnabled = stopLossTrailingEnabled == 'ON' or stopLossTrailingEnabled == 'TP' and longTrailingTakeProfitExecuted
+var float longStopLossPrice = na
+longStopLossPrice := if (strategy.position_size > 0)
+    if (longCondition)
+        getLongStopLossPrice(close)
+    else
+        baseSrc = longTakeProfitTrailingEnabled and stopLossMethod == 'CLOSE' ? close : longTakeProfitTrailingEnabled and stopLossMethod == 'WICK' ? high : strategy.position_avg_price
+        stopPrice = getLongStopLossPrice(baseSrc)
+        stopPrice := longbreakEvenEnabled and longTrailingTakeProfitExecuted ? math.max(stopPrice, strategy.position_avg_price) : stopPrice
+        math.max(stopPrice, nz(longStopLossPrice[1]))
+else
+    na
+
+getShortStopLossPrice(baseSrc) =>
+    switch shortstopLossMethod
+        'PERC' => baseSrc * (1 + shortTrailingStopLossPerc)
+        'ATR' => baseSrc + shortStopLossAtrMul * openAtr
+        'BOTH' => math.min(baseSrc * (1 + shortTrailingStopLossPerc), baseSrc + shortStopLossAtrMul * openAtr)
+        => na
+bool shortTakeProfitTrailingEnabled = stopLossTrailingEnabled == 'ON' or stopLossTrailingEnabled == 'TP' and shortTrailingTakeProfitExecuted
+var float shortStopLossPrice = na
+shortStopLossPrice := if (strategy.position_size < 0)
+    if (shortCondition)
+        getShortStopLossPrice(close)
+    else
+        baseSrc = shortTakeProfitTrailingEnabled and stopLossMethod == 'CLOSE' ? close : shortTakeProfitTrailingEnabled and stopLossMethod == 'WICK' ? low : strategy.position_avg_price
+        stopPrice = getShortStopLossPrice(baseSrc)
+        stopPrice := shortbreakEvenEnabled and shortTrailingTakeProfitExecuted ? math.min(stopPrice, strategy.position_avg_price) : stopPrice
+        math.min(stopPrice, nz(shortStopLossPrice[1], 999999.9))
+else
+    na
+
+
+// --- 5. 전략 진입 및 청산 실행 ---
+if (longCondition)
+    strategy.entry("Long", strategy.long)
+if (shortCondition)
+    strategy.entry("Short", strategy.short)
+if (strategy.position_size > 0)
+    strategy.exit("Long Exit", from_entry="Long", stop=longStopLossPrice)
+if (strategy.position_size < 0)
+    strategy.exit("Short Exit", from_entry="Short", stop=shortStopLossPrice)
+
+
+// --- 6. 시각화 ---
+plot(ema1, "EMA 20", color=color.new(color.blue, 0))
+plot(ema2, "EMA 60", color=color.new(color.orange, 0))
+plot(ema3, "EMA 120", color=color.new(color.purple, 0))
+plot(ema4, "EMA 200", color=color.new(color.red, 0), linewidth=2)
+
+bgcolor(isCompressed ? color.new(color.gray, 85) : na)
+bool isChoppy = ci_val >= ciThreshold
+bgcolor(useCiFilter and isChoppy ? color.new(color.red, 90) : na)
+
+plot(series = longStopLossPrice, title = 'Long Stop Loss', color = color.new(color.fuchsia, 0), linewidth = 2, style = plot.style_steplinebr)
+plot(series = shortStopLossPrice, title = 'Short Stop Loss', color = color.new(color.fuchsia, 0), linewidth = 2, style = plot.style_steplinebr)

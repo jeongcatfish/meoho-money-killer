@@ -1,0 +1,160 @@
+//@version=5
+strategy("BB Spot Long Strategy",
+     overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100,
+     slippage=1,
+     commission_type=strategy.commission.percent,
+     commission_value=0.1)
+
+// ============================================================================
+// TRADE SETTING
+// ============================================================================
+start_time = input.time(defval=timestamp("01 Jan 2020 00:00 +0000"), title="Start", group="Trade Setting")
+end_time = input.time(defval=timestamp("31 Dec 2099 00:00 +0000"), title="End", group="Trade Setting")
+in_trade = (time >= start_time) and (time <= end_time)
+
+// ============================================================================
+// BOLLINGER BANDS
+// ============================================================================
+bbLength = input.int(20, "Length", group="Bollinger Bands", inline="bb")
+bbDev = input.float(2.0, "StdDev", group="Bollinger Bands", inline="bb")
+
+[bbMiddle, bbUpper, bbLower] = ta.bb(close, bbLength, bbDev)
+
+// ============================================================================
+// TREND FILTER
+// ============================================================================
+useTrendFilter = input.bool(true, "Enable", group="Trend Filter", inline="trend")
+trendLength = input.int(50, "EMA", group="Trend Filter", inline="trend")
+
+trendEMA = ta.ema(close, trendLength)
+trendOK = not useTrendFilter or close > trendEMA
+
+// ============================================================================
+// VOLATILITY FILTER (변동성 있을 때만 진입)
+// ============================================================================
+useVolFilter = input.bool(true, "Enable", group="Volatility Filter", inline="vol")
+volStdLength = input.int(15, "StdDev", group="Volatility Filter", inline="vol")
+volMaLength = input.int(15, "MA", group="Volatility Filter", inline="vol")
+
+stdDevClose = ta.stdev(close, volStdLength)
+volCondition = not useVolFilter or stdDevClose > ta.sma(stdDevClose, volMaLength)
+
+// ============================================================================
+// ENTRY TYPE
+// ============================================================================
+entryType = input.string("Lower Touch", "Entry Type", options=["Lower Touch", "Upper Breakout"], group="Entry")
+
+// Lower Touch: 하단 밴드 터치 후 반등 (Mean Reversion)
+// Upper Breakout: 상단 밴드 돌파 (Momentum)
+
+// ============================================================================
+// EXIT SETTINGS (%)
+// ============================================================================
+slPercent = input.float(2.0, "SL %", step=0.5, group="Exit", inline="sltp")
+tpPercent = input.float(5.0, "TP %", step=0.5, group="Exit", inline="sltp")
+
+useTSL = input.bool(true, "Trailing Stop", group="Exit", inline="tsl")
+tslPercent = input.float(2.0, "TS %", step=0.5, group="Exit", inline="tsl")
+tslOffset = input.float(0.5, "Offset %", step=0.1, group="Exit", inline="tsl")
+
+// ============================================================================
+// RISK MANAGEMENT
+// ============================================================================
+maxDailyLoss = input.int(5, "Max Daily Loss %", group="Risk Management")
+strategy.risk.max_intraday_loss(maxDailyLoss, strategy.percent_of_equity)
+
+// ============================================================================
+// ENTRY CONDITIONS
+// ============================================================================
+// Lower Touch: 종가가 하단밴드 아래로 갔다가 다시 위로 올라옴
+lowerTouch = ta.crossover(close, bbLower)
+
+// Upper Breakout: 종가가 상단밴드 돌파
+upperBreak = ta.crossover(close, bbUpper)
+
+entrySignal = entryType == "Lower Touch" ? lowerTouch : upperBreak
+
+canLong = entrySignal and trendOK and volCondition and in_trade and strategy.position_size == 0
+
+// ============================================================================
+// EXIT CONDITIONS
+// ============================================================================
+// Lower Touch 전략: 중간밴드 도달 시 청산 옵션
+exitAtMiddle = entryType == "Lower Touch" and ta.crossover(close, bbMiddle)
+
+// Upper Breakout 전략: 하단밴드 터치 시 청산
+exitAtLower = entryType == "Upper Breakout" and ta.crossunder(close, bbLower)
+
+// ============================================================================
+// EXECUTION
+// ============================================================================
+if canLong
+    strategy.entry("Long", strategy.long)
+
+// SL/TP 계산
+slPrice = strategy.position_avg_price * (1 - slPercent / 100)
+tpPrice = strategy.position_avg_price * (1 + tpPercent / 100)
+
+// Trailing Stop 계산
+tsTick = tslPercent * close / syminfo.mintick / 100
+toTick = tslOffset * close / syminfo.mintick / 100
+
+if useTSL
+    strategy.exit("Exit", "Long", stop=slPrice, limit=tpPrice, trail_points=tsTick, trail_offset=toTick, comment_loss="SL", comment_profit="TP", comment_trailing="TSL")
+else
+    strategy.exit("Exit", "Long", stop=slPrice, limit=tpPrice, comment_loss="SL", comment_profit="TP")
+
+// 추가 청산 조건
+if strategy.position_size > 0 and (exitAtMiddle or exitAtLower)
+    strategy.close("Long", comment="Signal Exit")
+
+// ============================================================================
+// VISUALS
+// ============================================================================
+plot(bbMiddle, "BB Mid", color=color.orange)
+bbUp = plot(bbUpper, "BB Upper", color=color.blue)
+bbLo = plot(bbLower, "BB Lower", color=color.blue)
+fill(bbUp, bbLo, color=color.new(color.blue, 95))
+
+plot(useTrendFilter ? trendEMA : na, "Trend EMA", color=color.yellow, linewidth=2)
+
+plotshape(canLong, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
+
+// 변동성 낮을 때 배경색
+bgcolor(not volCondition ? color.new(color.red, 95) : na)
+
+// ============================================================================
+// PERFORMANCE TABLE
+// ============================================================================
+var table perfTable = table.new(position.bottom_left, 4, 4, border_width=1, bgcolor=color.black, border_color=color.gray)
+
+if barstate.islast
+    // Stats
+    winRate = strategy.closedtrades > 0 ? (strategy.wintrades / strategy.closedtrades) * 100 : 0
+    profitFactor = strategy.grossloss != 0 ? strategy.grossprofit / math.abs(strategy.grossloss) : 0
+    netProfit = strategy.netprofit
+
+    profitColor = netProfit > 0 ? color.lime : color.red
+
+    table.cell(perfTable, 0, 0, "Trades", text_color=color.gray, text_size=size.small)
+    table.cell(perfTable, 1, 0, str.tostring(strategy.closedtrades), text_color=color.white, text_size=size.small)
+    table.cell(perfTable, 2, 0, "Win Rate", text_color=color.gray, text_size=size.small)
+    table.cell(perfTable, 3, 0, str.tostring(math.round(winRate, 1)) + "%", text_color=color.white, text_size=size.small)
+
+    table.cell(perfTable, 0, 1, "Net Profit", text_color=color.gray, text_size=size.small)
+    table.cell(perfTable, 1, 1, str.tostring(math.round(netProfit, 2)), text_color=profitColor, text_size=size.small)
+    table.cell(perfTable, 2, 1, "Profit Factor", text_color=color.gray, text_size=size.small)
+    table.cell(perfTable, 3, 1, str.tostring(math.round(profitFactor, 2)), text_color=color.white, text_size=size.small)
+
+    table.cell(perfTable, 0, 2, "Position", text_color=color.gray, text_size=size.small)
+    table.cell(perfTable, 1, 2, strategy.position_size > 0 ? "LONG" : "FLAT", text_color=strategy.position_size > 0 ? color.lime : color.gray, text_size=size.small)
+    table.cell(perfTable, 2, 2, "Unrealized", text_color=color.gray, text_size=size.small)
+    table.cell(perfTable, 3, 2, str.tostring(math.round(strategy.openprofit, 2)), text_color=strategy.openprofit >= 0 ? color.lime : color.red, text_size=size.small)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+alertcondition(canLong, "Long Entry", "BB Spot Long Signal")
