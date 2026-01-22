@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trade Execution Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* Palette: Slate & Emerald */
+      --bg-body: #f8fafc;
+      --bg-card: #ffffff;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --border: #e2e8f0;
+
+      /* Accents */
+      --primary: #6366f1;
+      /* Indigo */
+      --success: #10b981;
+      /* Emerald */
+      --danger: #f43f5e;
+      /* Rose */
+      --warning: #f59e0b;
+      /* Amber */
+
+      /* Semantic colors */
+      --bg-success: #ecfdf5;
+      --text-success: #047857;
+      --bg-danger: #fff1f2;
+      --text-danger: #be123c;
+      --bg-warning: #fffbeb;
+      --text-warning: #b45309;
+      --bg-muted: #f1f5f9;
+
+      --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+      --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      color: var(--text-main);
+      background-color: var(--bg-body);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+
+    .app {
+      width: 100%;
+      max-width: 1000px;
+      display: grid;
+      gap: 24px;
+    }
+
+    /* HEADER */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header-title h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    .header-title .tag {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--primary);
+      font-weight: 700;
+      margin-bottom: 4px;
+      display: block;
+    }
+
+    .header-meta {
+      text-align: right;
+    }
+
+    .server-time {
+      font-size: 18px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .update-time {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* GRID LAYOUT */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 24px;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow-sm);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Layout specific spans */
+    .col-span-12 {
+      grid-column: span 12;
+    }
+
+    .col-span-8 {
+      grid-column: span 8;
+    }
+
+    .col-span-6 {
+      grid-column: span 6;
+    }
+
+    .col-span-4 {
+      grid-column: span 4;
+    }
+
+    @media (max-width: 768px) {
+
+      .col-span-8,
+      .col-span-6,
+      .col-span-4 {
+        grid-column: span 12;
+      }
+
+      .header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 16px;
+      }
+
+      .header-meta {
+        text-align: left;
+      }
+    }
+
+    /* TYPOGRAPHY COMPONENTS */
+    .label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .value-lg {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .value {
+      font-size: 16px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .mono {
+      font-family: 'JetBrains Mono', 'Menlo', monospace;
+      font-size: 13px;
+    }
+
+    /* METRICS & LISTS */
+    .metric-stack {
+      margin-bottom: 20px;
+    }
+
+    .metric-stack:last-child {
+      margin-bottom: 0;
+    }
+
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .metric-row:last-child {
+      border-bottom: none;
+    }
+
+    .metric-row:first-child {
+      padding-top: 0;
+    }
+
+    /* STATUS PILLS */
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--bg-muted);
+      color: var(--text-muted);
+    }
+
+    .pill[data-state="open"],
+    .pill[data-state="ok"] {
+      background: var(--bg-success);
+      color: var(--text-success);
+    }
+
+    .pill[data-state="warn"] {
+      background: var(--bg-warning);
+      color: var(--text-warning);
+    }
+
+    .pill[data-state="error"] {
+      background: var(--bg-danger);
+      color: var(--text-danger);
+    }
+
+    /* POS/NEG TEXT */
+    .text-pos {
+      color: var(--success);
+    }
+
+    .text-neg {
+      color: var(--danger);
+    }
+
+    .text-zero {
+      color: var(--text-muted);
+    }
+
+    /* PROGRESS BARS */
+    .bar-wrap {
+      height: 6px;
+      background: var(--bg-muted);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .bar-fill {
+      height: 100%;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    .bar-fill.tp {
+      background: var(--success);
+    }
+
+    .bar-fill.sl {
+      background: var(--danger);
+    }
+
+    /* BUTTONS */
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.1s;
+    }
+
+    .btn-ghost:hover {
+      background: var(--bg-muted);
+    }
+
+    /* ASSETS TABLE */
+    .asset-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px;
+      background: var(--bg-muted);
+      border-radius: 8px;
+      margin-bottom: 8px;
+    }
+
+    .asset-item.krw {
+      background: #fdfce8;
+      /* Very light yellow for KRW */
+      border: 1px solid #fef08a;
+    }
+
+    .asset-main {
+      font-weight: 600;
+      font-size: 15px;
+    }
+
+    .asset-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: right;
+    }
+
+    /* ACTIVITY LOG */
+    .activity-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .activity-item {
+      display: flex;
+      gap: 12px;
+      font-size: 13px;
+    }
+
+    .activity-time {
+      color: var(--text-muted);
+      min-width: 80px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .activity-msg {
+      font-weight: 500;
+    }
+
+    .activity-empty {
+      text-align: center;
+      padding: 20px;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    /* SPARKLINE */
+    canvas {
+      width: 100%;
+      height: 60px;
+      border-radius: 6px;
+      background: var(--bg-muted);
+      margin-top: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+
+    <!-- Header -->
+    <header class="header">
+      <div class="header-title">
+        <span class="tag">Pine Slave</span>
+        <h1>Execution Monitor</h1>
+      </div>
+      <div class="header-meta">
+        <div class="server-time" id="server-time">--:--:--</div>
+        <div class="update-time" id="updated">Waiting...</div>
+      </div>
+    </header>
+
+    <div class="grid">
+
+      <!-- Primary Position Card -->
+      <section class="card col-span-8">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 24px;">
+          <div>
+            <div class="label">Current Position</div>
+            <div class="value-lg" id="position-market">--</div>
+          </div>
+          <div class="pill" id="position-status" data-state="none">--</div>
+        </div>
+
+        <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+          <div>
+            <div class="label">Entry Price</div>
+            <div class="value" id="position-entry">--</div>
+          </div>
+          <div>
+            <div class="label">Current Price</div>
+            <div class="value" id="last-price">--</div>
+          </div>
+          <div>
+            <div class="label">Unrealized PnL</div>
+            <div class="value" id="position-pnl">--</div>
+          </div>
+          <div>
+            <div class="label">ROI</div>
+            <div class="value" id="position-roi">--</div>
+          </div>
+        </div>
+
+        <div class="metric-stack">
+          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:4px;">
+            <span>Distance to Take Profit</span>
+            <span id="distance-tp-label" style="font-weight:600">--</span>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar-fill tp" id="distance-tp-bar"></div>
+          </div>
+        </div>
+
+        <div class="metric-stack">
+          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:4px;">
+            <span>Distance to Stop Loss</span>
+            <span id="distance-sl-label" style="font-weight:600">--</span>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar-fill sl" id="distance-sl-bar"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Trends & Stats -->
+      <section class="card col-span-4">
+        <div class="label">Trends</div>
+        <div style="margin-top:12px">
+          <div class="label" style="font-size:11px">ROI History</div>
+          <canvas id="roi-sparkline"></canvas>
+        </div>
+        <div style="margin-top:12px">
+          <div class="label" style="font-size:11px">PnL History (KRW)</div>
+          <canvas id="pnl-sparkline"></canvas>
+        </div>
+
+        <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border);">
+          <div class="metric-row">
+            <span class="label">Amount</span>
+            <span class="value" id="position-amount">--</span>
+          </div>
+          <div class="metric-row">
+            <span class="label">Elapsed</span>
+            <span class="value" id="position-elapsed">--</span>
+          </div>
+          <div class="metric-row">
+            <span class="label">TP / SL</span>
+            <span class="value" id="position-tp-sl">--</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Accounts -->
+      <section class="card col-span-6">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <div class="label">Wallet Balance</div>
+          <button class="btn-ghost" onclick="fetchBalances()">Refresh</button>
+        </div>
+        <div id="balances" style="flex:1; display:flex; flex-direction:column; gap:8px;">
+          <div class="activity-empty">Load balances to view</div>
+        </div>
+        <div class="label" id="balances-meta" style="margin-top:12px; font-size:11px; text-align:right;">--</div>
+      </section>
+
+      <!-- System Status -->
+      <section class="card col-span-6">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <div class="label">System Health</div>
+          <div class="pill" id="api-status" data-state="none">API --</div>
+        </div>
+
+        <div class="metric-row">
+          <span class="label">Last Webhook</span>
+          <span class="value mono" id="last-webhook">--</span>
+        </div>
+        <div class="metric-row">
+          <div style="display:flex; flex-direction:column;">
+            <span class="label">Last Signal ID</span>
+            <span class="mono" style="font-size:11px; color:var(--text-muted)" id="last-signal-id">--</span>
+          </div>
+        </div>
+        <div class="metric-row">
+          <div style="display:flex; flex-direction:column;">
+            <span class="label">Last Error</span>
+            <span class="mono" style="font-size:11px; color:var(--danger)" id="last-api-error">--</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Activity Log -->
+      <section class="card col-span-12">
+        <div class="label" style="margin-bottom:16px;">Recent Activity</div>
+        <div class="activity-list" id="activity-log">
+          <div class="activity-empty">No events recorded</div>
+        </div>
+      </section>
+
+    </div> <!-- End Grid -->
+  </div>
+
+  <script>
+    // --- UTILS ---
+    function formatNumber(val, digits = 0) {
+      const n = Number(val);
+      if (!Number.isFinite(n)) return "--";
+      return n.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: 0 });
+    }
+    function formatSigned(val, digits = 0) {
+      const n = Number(val);
+      if (!Number.isFinite(n)) return "--";
+      return (n > 0 ? "+" : "") + formatNumber(n, digits);
+    }
+    function formatPercent(val) {
+      const n = Number(val);
+      if (!Number.isFinite(n)) return "--";
+      return (n * 100).toFixed(2) + "%";
+    }
+    function formatSignedPercent(val) {
+      const n = Number(val);
+      if (!Number.isFinite(n)) return "--";
+      return (n > 0 ? "+" : "") + (n * 100).toFixed(2) + "%";
+    }
+    function clamp(val, min, max) {
+      return Math.min(max, Math.max(min, val));
+    }
+
+    // --- DOM UPDATES ---
+
+    function setSigned(id, val, formatter) {
+      const el = document.getElementById(id);
+      if (!el) return;
+
+      el.classList.remove("text-pos", "text-neg", "text-zero");
+      if (!Number.isFinite(val)) {
+        el.textContent = "--";
+        return;
+      }
+
+      if (val > 0) el.classList.add("text-pos");
+      else if (val < 0) el.classList.add("text-neg");
+      else el.classList.add("text-zero");
+
+      el.textContent = formatter(val);
+    }
+
+    function setBar(barId, labelId, ratio) {
+      const bar = document.getElementById(barId);
+      const label = document.getElementById(labelId);
+      if (!bar) return;
+
+      if (!Number.isFinite(ratio)) {
+        bar.style.width = "0%";
+        if (label) label.textContent = "--";
+        return;
+      }
+
+      const pct = clamp(ratio * 100, 0, 100);
+      bar.style.width = pct + "%";
+      if (label) label.textContent = pct.toFixed(0) + "%";
+    }
+
+    // --- FORMATTERS ---
+
+    function formatDuration(sec) {
+      if (!Number.isFinite(sec)) return "--";
+      const total = Math.max(0, Math.floor(sec));
+      if (total < 60) return total + "s";
+
+      const d = Math.floor(total / 86400);
+      const h = Math.floor((total % 86400) / 3600);
+      const m = Math.floor((total % 3600) / 60);
+
+      let s = "";
+      if (d > 0) s += d + "d ";
+      if (h > 0 || d > 0) s += h + "h ";
+      s += m + "m";
+      return s;
+    }
+
+    function formatTimeRelative(ts, serverTime) {
+      if (!ts) return "--";
+      const date = new Date(ts * 1000);
+      const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+      if (serverTime) {
+        const diff = serverTime - ts;
+        if (diff < 60) return timeStr + " (now)";
+        return timeStr + " (" + formatDuration(diff) + " ago)";
+      }
+      return timeStr;
+    }
+
+    // --- MAIN RENDER ---
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch("/status");
+        const data = await res.json();
+
+        const now = data.server_time || (Date.now() / 1000);
+        document.getElementById("server-time").textContent = new Date(now * 1000).toLocaleTimeString();
+        document.getElementById("updated").textContent = "Updated";
+
+        // System
+        const api = data.api || {};
+        const apiEl = document.getElementById("api-status");
+        const lastErr = api.last_error_at || 0;
+        const lastOk = api.last_ok_at || 0;
+
+        if (lastErr > lastOk) {
+          apiEl.dataset.state = "error";
+          apiEl.textContent = "API Error";
+        } else if (now - lastOk > 60) {
+          apiEl.dataset.state = "warn";
+          apiEl.textContent = "API Stale";
+        } else {
+          apiEl.dataset.state = "ok";
+          apiEl.textContent = "API OK";
+        }
+        document.getElementById("last-api-error").textContent = api.last_error_message || "None";
+
+        // Webhook
+        const wh = data.webhook || {};
+        document.getElementById("last-webhook").textContent = formatTimeRelative(wh.last_received_at, now);
+        document.getElementById("last-signal-id").textContent = wh.last_signal_id || "--";
+
+        // Position
+        const pos = data.position;
+        if (!pos) {
+          document.getElementById("position-status").textContent = "No Position";
+          document.getElementById("position-status").dataset.state = "none";
+          document.getElementById("position-market").textContent = "--";
+          document.getElementById("position-entry").textContent = "--";
+          document.getElementById("last-price").textContent = formatNumber(data.last_price, 4);
+          document.getElementById("position-pnl").textContent = "--";
+          document.getElementById("position-roi").textContent = "--";
+          document.getElementById("position-amount").textContent = "--";
+          document.getElementById("position-elapsed").textContent = "--";
+          document.getElementById("position-tp-sl").textContent = "--";
+          setBar("distance-tp-bar", "distance-tp-label", NaN);
+          setBar("distance-sl-bar", "distance-sl-label", NaN);
+
+          updateSparklines([], []);
+        } else {
+          const state = (pos.status || "OPEN").toLowerCase();
+          const isOpen = state === "open";
+
+          const badge = document.getElementById("position-status");
+          badge.textContent = pos.status;
+          badge.dataset.state = isOpen ? "open" : "none";
+
+          document.getElementById("position-market").textContent = pos.market;
+          document.getElementById("position-entry").textContent = formatNumber(pos.entry_price, 4);
+          document.getElementById("last-price").textContent = formatNumber(data.last_price, 4);
+          document.getElementById("position-amount").textContent = formatNumber(pos.amount, 8);
+          document.getElementById("position-tp-sl").textContent = formatPercent(pos.tp) + " / " + formatPercent(pos.sl);
+
+          if (isOpen) {
+            document.getElementById("position-elapsed").textContent = formatDuration(now - pos.opened_at);
+
+            const ep = pos.entry_price;
+            const lp = data.last_price;
+            const pnl = (lp - ep) * pos.amount;
+            const roi = (lp / ep) - 1;
+
+            setSigned("position-pnl", pnl, (v) => formatSigned(v, 0) + " KRW");
+            setSigned("position-roi", roi, formatSignedPercent);
+
+            // Bars
+            const tpPrice = ep * (1 + pos.tp);
+            const slPrice = ep * (1 - pos.sl);
+
+            const tpProgress = (tpPrice - lp) / (tpPrice - ep);
+            // Logic: if tpPrice is 110, ep is 100. lp is 105. 
+            // Remaining distance ratio. 
+            // Previous code logic was: tpRemaining = (tpPrice - lastPrice) / tpRange;
+            // If lp = 100, (110-100)/10 = 1.0 (100% remaining).
+            // If lp = 105, (110-105)/10 = 0.5 (50% remaining).
+            // Visualization usually wants "Progress TO target".
+            // Progress = 1 - Remaining.
+            // Let's stick to original logic: "Distance TO TP".
+            // So 100% means we are AT entry. 0% means we are AT TP.
+
+            // Wait, the progress bar usually fills UP as we get closer.
+            // Let's calculate "Percent Achieved".
+            // achieved = (lp - ep) / (tpPrice - ep).
+            // if lp=100, achieved=0. 
+            // if lp=105, achieved=0.5.
+            // if lp=110, achieved=1.0.
+            // Correct.
+
+            let tpPct = 0;
+            if (pos.tp > 0) tpPct = (lp - ep) / (tpPrice - ep);
+
+            // For SL, it is "Percent Lost".
+            // achieved = (ep - lp) / (ep - slPrice).
+            let slPct = 0;
+            if (pos.sl > 0) slPct = (ep - lp) / (ep - slPrice);
+
+            setBar("distance-tp-bar", "distance-tp-label", tpPct);
+            setBar("distance-sl-bar", "distance-sl-label", slPct);
+
+            updateSparklines(roi, pnl);
+          }
+        }
+
+        // Activity
+        const logs = document.getElementById("activity-log");
+        if (data.events && data.events.length > 0) {
+          logs.innerHTML = "";
+          [...data.events].reverse().forEach(e => {
+            const row = document.createElement("div");
+            row.className = "activity-item";
+
+            const t = document.createElement("div");
+            t.className = "activity-time";
+            t.textContent = formatTimeRelative(e.ts, 0).split(" ")[0]; // just time
+
+            const m = document.createElement("div");
+            m.className = "activity-msg";
+            m.textContent = e.message;
+            if (e.roi) m.textContent += ` (ROI ${formatSignedPercent(e.roi)})`;
+
+            row.appendChild(t);
+            row.appendChild(m);
+            logs.appendChild(row);
+          });
+        }
+
+      } catch (e) {
+        console.error(e);
+        document.getElementById("updated").textContent = "Connection Lost";
+      }
+    }
+
+    // --- CHARTING ---
+    const roiHistory = [];
+    const pnlHistory = [];
+    const maxPoints = 50;
+
+    function updateSparklines(roi, pnl) {
+      if (Number.isFinite(roi)) {
+        roiHistory.push(roi);
+        if (roiHistory.length > maxPoints) roiHistory.shift();
+      }
+      if (Number.isFinite(pnl)) {
+        pnlHistory.push(pnl);
+        if (pnlHistory.length > maxPoints) pnlHistory.shift();
+      }
+
+      drawChart("roi-sparkline", roiHistory, "#10b981"); // Success color
+      drawChart("pnl-sparkline", pnlHistory, "#f59e0b"); // Warning/Primary
+    }
+
+    function drawChart(id, data, color) {
+      const cvs = document.getElementById(id);
+      const ctx = cvs.getContext("2d");
+      const w = cvs.width = cvs.clientWidth;
+      const h = cvs.height = cvs.clientHeight;
+
+      ctx.clearRect(0, 0, w, h);
+      if (data.length < 2) return;
+
+      const min = Math.min(...data);
+      const max = Math.max(...data);
+      const range = max - min || 1;
+
+      ctx.beginPath();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+
+      data.forEach((pt, i) => {
+        const x = (i / (data.length - 1)) * w;
+        const y = h - ((pt - min) / range) * h;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+
+    // --- BALANCES ---
+    async function fetchBalances() {
+      const el = document.getElementById("balances");
+      el.innerHTML = '<div class="activity-empty">Loading...</div>';
+      try {
+        const res = await fetch("/account/balances");
+        const data = await res.json();
+        const accts = data.accounts || [];
+
+        const filtered = accts.filter(a => a.currency !== "BTT" && a.currency !== "APENFT" && Number(a.balance) > 0);
+        document.getElementById("balances-meta").textContent = filtered.length + " assets";
+
+        el.innerHTML = "";
+
+        if (filtered.length === 0) {
+          el.innerHTML = '<div class="activity-empty">No funded assets</div>';
+          return;
+        }
+
+        filtered.forEach(a => {
+          const row = document.createElement("div");
+          row.className = "asset-item";
+          if (a.currency === "KRW") row.classList.add("krw");
+
+          const left = document.createElement("div");
+          left.className = "asset-main";
+          left.textContent = a.currency;
+
+          const right = document.createElement("div");
+          right.className = "asset-sub";
+          const digits = a.currency === "KRW" ? 0 : 4;
+          right.innerHTML = `<div>${formatNumber(a.balance, digits)}</div>`;
+          if (Number(a.avg_buy_price) > 0) {
+            right.innerHTML += `<div>Avg: ${formatNumber(a.avg_buy_price, 0)}</div>`;
+          }
+
+          row.appendChild(left);
+          row.appendChild(right);
+          el.appendChild(row);
+        });
+      } catch (e) {
+        el.innerHTML = '<div class="activity-empty text-neg">Failed to load</div>';
+      }
+    }
+
+    // Init
+    setInterval(fetchStatus, 1000);
+    fetchStatus();
+  </script>
+</body>
+
+</html>
