@@ -1,0 +1,49 @@
+//@version=5
+strategy("VSA + Absorption – Long Only (100% Equity)", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// ────────────────────────────────────────
+// Inputs
+// ────────────────────────────────────────
+market     = input.string("KRW-ETH", "Market (Upbit format)")
+orderKrw   = input.float(100000, "Order Amount (KRW)")
+lenDelta   = input.int(5, "Delta Lookback")
+spreadMult = input.float(1.6, "Wide Spread × ATR")
+volMult    = input.float(1.7, "High Volume × SMA20")
+tpPct      = input.float(1.0, "TP %")
+slPct      = input.float(1.5, "SL %")
+
+// ────────────────────────────────────────
+// Proxy Delta (aggressive buy/sell volume difference)
+// ────────────────────────────────────────
+delta = volume * (close - open) / (high - low)   // simple directional volume proxy
+avgDelta = ta.sma(delta, lenDelta)
+deltaUp = delta > avgDelta
+deltaDown = delta < avgDelta
+
+wideSpread = (high - low) > ta.atr(14) * spreadMult
+highVol    = volume > ta.sma(volume, 20) * volMult
+
+// Absorption proxy (high vol down bar + delta turns up)
+absorptionBull = highVol and close > open and deltaUp and deltaDown[1]
+
+// ────────────────────────────────────────
+// TP / SL (ratio for server)
+// ────────────────────────────────────────
+tpRatio = tpPct / 100  // 1.0% = 0.01
+slRatio = slPct / 100  // 1.5% = 0.015
+
+// ────────────────────────────────────────
+// Entry / Exit (Long Only)
+// ────────────────────────────────────────
+alertMsg = '{"market":"' + market + '","action":"BUY","signal_id":"' + str.tostring(timenow) + '","price":' + str.tostring(orderKrw) + ',"tp":' + str.tostring(tpRatio) + ',"sl":' + str.tostring(slRatio) + '}'
+
+if absorptionBull
+    strategy.entry("Absorb Long", strategy.long, alert_message=alertMsg)
+
+strategy.exit("Exit Long", "Absorb Long", stop=close * (1 - slRatio), limit=close * (1 + tpRatio))
+
+// ────────────────────────────────────────
+// Visuals
+// ────────────────────────────────────────
+bgcolor(absorptionBull ? color.new(color.green, 88) : na, title="Absorption Bull")
+plotshape(absorptionBull, "Buy Signal", shape.triangleup, location.belowbar, color.green)

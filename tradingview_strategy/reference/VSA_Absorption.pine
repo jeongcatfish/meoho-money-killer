@@ -1,0 +1,46 @@
+//@version=5
+strategy("VSA + Absorption Proxy – Holmes / Bookmap Style", overlay=true)
+
+// ────────────────────────────────────────
+// Inputs
+// ────────────────────────────────────────
+lenDelta   = input.int(5, "Delta Lookback")
+spreadMult = input.float(1.6, "Wide Spread × ATR")
+volMult    = input.float(1.7, "High Volume × SMA20")
+riskPct    = input.float(1.0, "Risk %")
+rrTarget   = input.float(3.5, "R:R Target")
+
+// ────────────────────────────────────────
+// Proxy Delta (aggressive buy/sell volume difference)
+delta = volume * (close - open) / (high - low)   // simple directional volume proxy
+avgDelta = ta.sma(delta, lenDelta)
+deltaUp = delta > avgDelta
+deltaDown = delta < avgDelta
+
+wideSpread = (high - low) > ta.atr(14) * spreadMult
+highVol    = volume > ta.sma(volume, 20) * volMult
+
+// Absorption proxy (high vol down bar + delta turns up)
+absorptionBull = highVol and close > open and deltaUp and deltaDown[1]
+
+// Rejection proxy (high vol up bar + delta turns down)
+rejectionBear = highVol and close < open and deltaDown and deltaUp[1]
+
+// ────────────────────────────────────────
+// Entry / Exit
+// ────────────────────────────────────────
+if absorptionBull
+    strategy.entry("Absorb Long", strategy.long)
+
+if rejectionBear
+    strategy.entry("Reject Short", strategy.short)
+
+strategy.exit("Exit Long", "Absorb Long", stop=low * (1 - riskPct/100), limit=close * (1 + riskPct*rrTarget/100))
+strategy.exit("Exit Short", "Reject Short", stop=high * (1 + riskPct/100), limit=close * (1 - riskPct*rrTarget/100))
+
+// ────────────────────────────────────────
+// Visuals
+bgcolor(absorptionBull ? color.new(color.green, 88) : na, title="Absorption Bull")
+bgcolor(rejectionBear ? color.new(color.red, 88) : na, title="Rejection Bear")
+plotshape(absorptionBull, "Buy Signal", shape.triangleup, location.belowbar, color.green)
+plotshape(rejectionBear, "Sell Signal", shape.triangledown, location.abovebar, color.red)
